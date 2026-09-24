@@ -19,8 +19,9 @@ def main() -> None:
     if args:
         print("Usage : icloud-calendar-mcp [check]", file=sys.stderr)
         sys.exit(2)
-    print("Le serveur MCP arrive à l'étape 3. Pour l'instant : icloud-calendar-mcp check", file=sys.stderr)
-    sys.exit(2)
+    from .server import run
+
+    run()
 
 
 def check() -> int:
@@ -38,12 +39,11 @@ def check() -> int:
         return 1
 
     print(f"iCloud    : connecté, {len(calendars)} calendrier(s) d'événements")
-    default = normalize(config.default_calendar) if config.default_calendar else None
     for cal in sorted(calendars, key=lambda c: normalize(c.name)):
         if config.is_protected(cal.name):
             mode = "PROTÉGÉ (lecture seule)"
         elif config.can_write(cal.name):
-            mode = "écriture" + (" (par défaut)" if normalize(cal.name) == default else "")
+            mode = "écriture"
         else:
             mode = "lecture seule"
         print(f"  - {cal.name:<32} {mode}")

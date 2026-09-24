@@ -5,11 +5,15 @@ permet de tout tester avec un faux iCloud en mémoire (voir tests/).
 """
 
 import logging
+import threading
 from collections.abc import Callable, Iterator
 from contextlib import contextmanager
 from dataclasses import dataclass
+from datetime import datetime
+from urllib.parse import unquote, urlsplit
 
 import caldav
+import icalendar
 from caldav.lib import error as caldav_error
 
 # En mode DEBUG, ces bibliothèques peuvent journaliser des en-têtes HTTP,
@@ -42,6 +46,9 @@ class CaldavBackend:
         self._principal = None
         self._calendars: dict[str, caldav.Calendar] = {}
         self._holds_events: dict[str, bool] = {}
+        # Claude peut appeler plusieurs outils en parallèle (chacun dans un thread) :
+        # le verrou les fait passer un par un sur la connexion iCloud.
+        self._lock = threading.RLock()
 
     # --- connexion -------------------------------------------------------
 
@@ -61,9 +68,10 @@ class CaldavBackend:
 
     @contextmanager
     def _errors(self) -> Iterator[None]:
-        """Traduit les erreurs réseau/CalDAV en messages clairs et sûrs."""
+        """Un seul accès iCloud à la fois, et des erreurs traduites en messages sûrs."""
         try:
-            yield
+            with self._lock:
+                yield
         except BackendError:
             raise
         except caldav_error.AuthorizationError:
@@ -100,5 +108,35 @@ class CaldavBackend:
                 if not self._holds_events[url]:
                     continue
                 self._calendars[url] = cal
-                refs.append(CalendarRef(name=cal.get_display_name() or url, url=url))
+                # strip() : iCloud garde parfois un espace en fin de nom (« Soirée »).
+                refs.append(CalendarRef(name=(cal.get_display_name() or url).strip(), url=url))
             return refs
+
+    def _calendar(self, ref: CalendarRef) -> caldav.Calendar:
+        if ref.url not in self._calendars:
+            self.list_calendars()
+        if ref.url not in self._calendars:
+            raise BackendError(f"Calendrier « {ref.name} » introuvable sur iCloud.")
+        return self._calendars[ref.url]
+
+    # --- événements ------------------------------------------------------
+
+    def search(self, ref: CalendarRef, start: datetime, end: datetime) -> list[tuple[str, icalendar.Component]]:
+        """Événements d'un calendrier sur une période, récurrences dépliées.
+
+        Renvoie des paires (event_id, VEVENT). Une réunion hebdomadaire donne une
+        paire par occurrence, toutes avec le même event_id (celui de la série).
+        """
+        with self._errors():
+            found = self._calendar(ref).search(start=start, end=end, event=True, expand=True)
+            pairs = []
+            for obj in found:
+                event_id = event_id_from_url(str(obj.url))
+                for comp in obj.get_icalendar_instance().walk("VEVENT"):
+                    pairs.append((event_id, comp))
+            return pairs
+
+
+def event_id_from_url(url: str) -> str:
+    """« https://.../calendars/home/ABC-123.ics » -> « ABC-123.ics »."""
+    return unquote(urlsplit(url).path.rstrip("/").rsplit("/", 1)[-1])

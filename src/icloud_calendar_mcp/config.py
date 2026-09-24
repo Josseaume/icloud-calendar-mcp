@@ -7,7 +7,7 @@ Elle vit hors du dépôt Git, dans ~/.config/icloud-calendar-mcp/config.toml
 import os
 import tomllib
 import unicodedata
-from dataclasses import dataclass
+from dataclasses import dataclass, field
 from pathlib import Path
 from zoneinfo import ZoneInfo, ZoneInfoNotFoundError
 
@@ -38,8 +38,11 @@ class Config:
     timezone: ZoneInfo
     writable_calendars: frozenset[str]  # noms normalisés
     protected_calendars: frozenset[str]  # noms normalisés
-    default_calendar: str | None  # nom tel qu'écrit dans la config
+    usages: dict[str, str] = field(default_factory=dict)  # nom normalisé -> à quoi il sert
     caldav_url: str = ICLOUD_CALDAV_URL
+
+    def usage(self, calendar_name: str) -> str | None:
+        return self.usages.get(normalize(calendar_name))
 
     def is_protected(self, calendar_name: str) -> bool:
         return normalize(calendar_name) in self.protected_calendars
@@ -97,17 +100,18 @@ def parse_config(raw: dict) -> Config:
             "Retire-les de writable_calendars."
         )
 
-    default = raw.get("default_calendar")
-    if default is not None:
-        if not isinstance(default, str) or normalize(default) not in writable:
-            raise ConfigError("default_calendar doit faire partie de writable_calendars.")
+    usages = raw.get("usages", {})
+    if not isinstance(usages, dict) or not all(
+        isinstance(v, str) and len(v) <= 200 for v in usages.values()
+    ):
+        raise ConfigError("usages doit associer un nom de calendrier à une phrase courte.")
 
     return Config(
         apple_id=apple_id.strip(),
         timezone=timezone,
         writable_calendars=writable,
         protected_calendars=protected,
-        default_calendar=default,
+        usages={normalize(k): v.strip() for k, v in usages.items()},
     )
 
 

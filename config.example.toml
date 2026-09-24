@@ -1,7 +1,7 @@
 # Exemple de configuration. La vraie se trouve dans :
 #   ~/.config/icloud-calendar-mcp/config.toml
 # Ce fichier ne contient AUCUN secret : le mot de passe pour app est dans le
-# Trousseau macOS (service « icloud-calendar-mcp », compte = apple_id).
+# Trousseau macOS (entrée dont le service s'appelle « icloud-calendar-mcp »).
 
 # Identifiant du compte Apple (l'email). Pas secret, mais personnel :
 # c'est pour ça que la vraie config n'est pas dans le dépôt Git.
@@ -12,12 +12,15 @@ timezone = "Europe/Paris"
 
 # Les SEULS calendriers où le serveur a le droit d'écrire.
 # Tout calendrier absent de cette liste est en lecture seule.
-writable_calendars = ["Perso"]
-
-# Calendrier utilisé quand Claude n'en précise pas.
-# Doit faire partie de writable_calendars.
-default_calendar = "Perso"
+writable_calendars = ["Perso", "Travail"]
 
 # Calendriers protégés : toujours en lecture seule, même s'ils sont ajoutés
 # par erreur dans writable_calendars (le serveur refuse alors de démarrer).
 protected_calendars = ["Cours ESIEE"]
+
+# À quoi sert chaque calendrier : Claude s'en sert pour choisir où ranger
+# un événement. Une phrase courte par calendrier.
+[usages]
+"Perso" = "sport, rappels, vie perso"
+"Travail" = "travail, révisions, projets"
+"Cours ESIEE" = "emploi du temps de l'école (ne jamais modifier)"

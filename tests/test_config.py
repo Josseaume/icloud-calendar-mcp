@@ -5,7 +5,6 @@ from icloud_calendar_mcp.config import ConfigError, parse_config
 BASE = {
     "apple_id": "prenom.nom@exemple.com",
     "writable_calendars": ["Perso"],
-    "default_calendar": "Perso",
     "protected_calendars": ["Cours ESIEE"],
 }
 
@@ -43,11 +42,6 @@ def test_refuse_un_calendrier_a_la_fois_modifiable_et_protege():
 def test_refuse_tout_secret_dans_la_config(key):
     with pytest.raises(ConfigError, match="Trousseau"):
         parse_config({**BASE, key: "quelque chose"})
-
-
-def test_calendrier_par_defaut_doit_etre_modifiable():
-    with pytest.raises(ConfigError, match="default_calendar"):
-        parse_config({**BASE, "default_calendar": "Travail"})
 
 
 def test_apple_id_obligatoire():
