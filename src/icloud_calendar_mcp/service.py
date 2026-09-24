@@ -7,6 +7,7 @@ iCloud, ou un faux en mémoire pendant les tests).
 
 import uuid
 from collections.abc import Callable
+from dataclasses import dataclass
 from datetime import date, datetime, timedelta, timezone
 
 import icalendar
@@ -36,6 +37,17 @@ MAX_RANGE = timedelta(days=92)
 
 class ServiceError(RuntimeError):
     """Refus ou erreur à expliquer à Claude (message sûr, en français)."""
+
+
+@dataclass(frozen=True)
+class DeletionTarget:
+    """Ce qui sera supprimé si Arthur confirme : l'événement ET sa version (etag)."""
+
+    calendar: CalendarRef
+    event_id: str
+    etag: str | None
+    summary: dict
+    question: str
 
 
 class CalendarService:
@@ -196,17 +208,17 @@ class CalendarService:
             return start < now
         return start < now.date()
 
-    def _editable_vevent(self, ical: icalendar.Calendar) -> icalendar.Component:
-        """Refuse les cas où une modification aurait des effets inattendus."""
+    def _editable_vevent(self, ical: icalendar.Calendar, action: str = "modifier") -> icalendar.Component:
+        """Refuse les cas où modifier/supprimer aurait des effets inattendus."""
         vevents = list(ical.walk("VEVENT"))
         if len(vevents) != 1 or any(k in vevents[0] for k in ("RRULE", "RDATE", "RECURRENCE-ID")):
             raise ServiceError(
-                "Événement récurrent : non modifiable ici (risque de toucher toute la série). "
-                "Fais-le dans l'app Calendrier."
+                f"Événement récurrent : impossible de le {action} ici (risque de toucher toute "
+                "la série). Fais-le dans l'app Calendrier."
             )
         if any(k in vevents[0] for k in ("ATTENDEE", "ORGANIZER")):
             raise ServiceError(
-                "Événement avec invités : le modifier enverrait des notifications à d'autres "
+                f"Événement avec invités : le {action} enverrait des notifications à d'autres "
                 "personnes. Fais-le dans l'app Calendrier."
             )
         return vevents[0]
@@ -222,6 +234,30 @@ class CalendarService:
             allowed = ", ".join(c.name for c in self.backend.list_calendars() if self._can_write(c))
             raise ServiceError(f"« {ref.name} » est en lecture seule. Calendriers modifiables : {allowed}.")
         return ref
+
+    # --- suppression ------------------------------------------------------------
+
+    def prepare_deletion(self, calendar: str | None, event_id: str) -> DeletionTarget:
+        """Vérifie les droits et prépare la question de confirmation. Ne supprime rien."""
+        target = self._writable_calendar(calendar)
+        validate_event_id(event_id)
+        ical, etag = self.backend.get(target, event_id)
+        vevent = self._editable_vevent(ical, action="supprimer")
+        info = from_component(vevent, target.name, event_id, self.config.timezone).to_dict()
+        # Titre ramené sur une ligne et raccourci : il vient d'iCloud, peut-être
+        # d'un tiers, et ne doit pas pouvoir « réécrire » la question affichée.
+        title = " ".join(info["title"].split())[:120]
+        question = (
+            "Claude demande à supprimer cet événement de ton agenda iCloud :\n\n"
+            f"« {title} »\n{info['when']}\nCalendrier : {target.name}\n\n"
+            "La suppression est définitive (Mac et iPhone)."
+        )
+        return DeletionTarget(calendar=target, event_id=event_id, etag=etag, summary=info, question=question)
+
+    def delete_event(self, target: DeletionTarget) -> dict:
+        """À n'appeler qu'APRÈS la confirmation d'Arthur (voir server.py)."""
+        self.backend.delete(target.calendar, target.event_id, target.etag)
+        return {"deleted": True, "event": target.summary}
 
     # --- outils internes ----------------------------------------------------
 

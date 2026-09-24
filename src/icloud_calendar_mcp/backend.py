@@ -163,6 +163,34 @@ class CaldavBackend:
             event.save()
         return result
 
+    def get(self, ref: CalendarRef, event_id: str) -> tuple[icalendar.Calendar, str | None]:
+        """Un événement et son ETag (l'empreinte de sa version actuelle)."""
+        url = event_url(ref, event_id)
+        with self._errors():
+            event = self._calendar(ref).event_by_url(url)
+            return event.get_icalendar_instance(), event.etag
+
+    def delete(self, ref: CalendarRef, event_id: str, etag: str | None) -> None:
+        """Supprime l'événement SEULEMENT s'il est encore dans la version `etag`.
+
+        « If-Match » : iCloud refuse (412) si l'événement a changé depuis qu'il
+        a été montré à Arthur pour confirmation. On supprime ce qu'il a validé,
+        pas autre chose.
+        """
+        url = event_url(ref, event_id)
+        headers = {"If-Match": etag} if etag else {}
+        with self._errors():
+            self._get_principal()
+            response = self._client.request(url, "DELETE", "", headers)
+            if response.status == 412:
+                raise BackendError(
+                    "L'événement a été modifié ailleurs depuis la confirmation : rien n'a été supprimé."
+                )
+            if response.status == 404:
+                raise BackendError("L'événement n'existe plus (déjà supprimé ?).")
+            if response.status not in (200, 204):
+                raise BackendError(f"iCloud a refusé la suppression (HTTP {response.status}).")
+
 
 # Caractères autorisés dans un event_id. Il vient de Claude, donc peut-être
 # d'une injection : sans ce filtre, « ../autre-calendrier/x.ics » ferait

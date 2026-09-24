@@ -7,20 +7,28 @@ comment l'appeler. Le vrai travail est fait par CalendarService (service.py).
 
 import logging
 import sys
-from collections.abc import Iterator
+from collections.abc import Callable, Iterator
 from contextlib import contextmanager
 from typing import Annotated
 
-from mcp.server.mcpserver import MCPServer
+from mcp.server.mcpserver import (
+    AcceptedElicitation,
+    Context,
+    Elicit,
+    ElicitationResult,
+    MCPServer,
+    Resolve,
+)
 from mcp.server.mcpserver.exceptions import ToolError
 from mcp_types import ToolAnnotations
-from pydantic import Field
+from pydantic import BaseModel, Field
 
 from .backend import BackendError, CaldavBackend
 from .config import ConfigError, load_config
+from .confirm import ask_native_confirmation
 from .events import EventInputError
 from .keychain import KeychainError, read_password
-from .service import CalendarService, ServiceError
+from .service import CalendarService, DeletionTarget, ServiceError
 
 logger = logging.getLogger("icloud_calendar_mcp")
 
@@ -48,6 +56,20 @@ Agenda iCloud d'Arthur (app Calendrier du Mac et de l'iPhone).
 READ_ONLY = ToolAnnotations(read_only_hint=True, destructive_hint=False, idempotent_hint=True)
 CREATE = ToolAnnotations(read_only_hint=False, destructive_hint=False, idempotent_hint=False)
 UPDATE = ToolAnnotations(read_only_hint=False, destructive_hint=True, idempotent_hint=True)
+DELETE = ToolAnnotations(read_only_hint=False, destructive_hint=True, idempotent_hint=False)
+
+
+class DeleteConfirmation(BaseModel):
+    """Le formulaire montré à Arthur par le client MCP (une seule case à cocher)."""
+
+    confirmer: bool = Field(default=False, title="Oui, supprimer définitivement")
+
+
+def client_can_ask_user(ctx: Context) -> bool:
+    """Le client MCP sait-il afficher une question à Arthur (« élicitation ») ?"""
+    capabilities = ctx.client_capabilities
+    elicitation = capabilities.elicitation if capabilities is not None else None
+    return elicitation is not None and (elicitation.form is not None or elicitation.url is None)
 
 
 @contextmanager
@@ -62,7 +84,10 @@ def _tool_errors() -> Iterator[None]:
         raise ToolError(f"Erreur interne inattendue ({type(exc).__name__}).") from None
 
 
-def build_server(service: CalendarService) -> MCPServer:
+def build_server(
+    service: CalendarService,
+    native_confirm: Callable[[str], bool] = ask_native_confirmation,
+) -> MCPServer:
     mcp = MCPServer(name="icloud-calendar", instructions=INSTRUCTIONS, log_level="WARNING")
 
     @mcp.tool(title="Lister les calendriers", annotations=READ_ONLY)
@@ -124,6 +149,46 @@ def build_server(service: CalendarService) -> MCPServer:
         calendriers en lecture seule."""
         with _tool_errors():
             return service.update_event(calendar, event_id, title, start, end, location, notes)
+
+    # --- Suppression : la confirmation vient d'Arthur, jamais de Claude ----------
+    #
+    # Les deux fonctions ci-dessous sont des « résolveurs » : le SDK MCP les
+    # exécute AVANT le corps de delete_event, pour remplir ses paramètres
+    # `target` et `confirmation`. Claude ne voit que `calendar` et `event_id` :
+    # il n'a aucun moyen de fournir lui-même une confirmation.
+
+    def load_deletion_target(calendar: str, event_id: str) -> DeletionTarget:
+        """Contrôle des droits + lecture de l'événement à supprimer."""
+        with _tool_errors():
+            return service.prepare_deletion(calendar, event_id)
+
+    def ask_confirmation(
+        target: Annotated[DeletionTarget, Resolve(load_deletion_target)],
+        ctx: Context,
+    ) -> Elicit[DeleteConfirmation] | DeleteConfirmation:
+        if client_can_ask_user(ctx):
+            # Le client (ex. Claude Code) affiche la question à Arthur et renvoie
+            # SA réponse ; le modèle ne participe pas à cet échange.
+            return Elicit(target.question, DeleteConfirmation)
+        # Sinon : fenêtre macOS. Sans Mac (serveur Linux), elle répond « non ».
+        return DeleteConfirmation(confirmer=native_confirm(target.question))
+
+    @mcp.tool(title="Supprimer un événement", annotations=DELETE)
+    def delete_event(
+        calendar: Annotated[str, Field(description="Calendrier de l'événement (champ calendar de list_events)")],
+        event_id: Annotated[str, Field(description="Identifiant de l'événement (champ event_id de list_events)")],
+        target: Annotated[DeletionTarget, Resolve(load_deletion_target)],
+        confirmation: Annotated[ElicitationResult[DeleteConfirmation], Resolve(ask_confirmation)],
+    ) -> dict:
+        """Supprime un événement. Arthur doit confirmer lui-même dans une fenêtre
+        de confirmation : si la réponse est « deleted: false », il a refusé, ne
+        réessaie pas sans qu'il le demande. Refusé pour les événements récurrents
+        ou avec invités, et dans les calendriers en lecture seule."""
+        confirmed = isinstance(confirmation, AcceptedElicitation) and confirmation.data.confirmer
+        if not confirmed:
+            return {"deleted": False, "message": "Suppression annulée : Arthur n'a pas confirmé."}
+        with _tool_errors():
+            return service.delete_event(target)
 
     return mcp
 

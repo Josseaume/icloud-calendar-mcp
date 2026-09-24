@@ -1,5 +1,6 @@
 """Faux iCloud en mémoire, pour tester toutes les règles sans réseau."""
 
+import hashlib
 from datetime import date, datetime, time, timedelta, timezone
 
 import icalendar
@@ -71,6 +72,23 @@ class FakeBackend:
         self.writes.append(("update", ref.name, event_id))
         return result
 
+    def get(self, ref, event_id):
+        validate_event_id(event_id)
+        store = self._ref(ref)
+        if event_id not in store:
+            raise BackendError("Élément introuvable sur iCloud.")
+        return icalendar.Calendar.from_ical(store[event_id]), etag_of(store[event_id])
+
+    def delete(self, ref, event_id, etag):
+        validate_event_id(event_id)
+        store = self._ref(ref)
+        if event_id not in store:
+            raise BackendError("L'événement n'existe plus (déjà supprimé ?).")
+        if etag and etag_of(store[event_id]) != etag:
+            raise BackendError("L'événement a été modifié ailleurs depuis la confirmation : rien n'a été supprimé.")
+        del store[event_id]
+        self.writes.append(("delete", ref.name, event_id))
+
     def ics(self, calendar_name, event_id):
         ref = next(c for c in self.calendars if c.name == calendar_name)
         return self.store[ref.url][event_id]
@@ -79,6 +97,11 @@ class FakeBackend:
         if ref.url not in self.store:
             raise BackendError("calendrier inconnu")
         return self.store[ref.url]
+
+
+def etag_of(ics: str) -> str:
+    """Empreinte d'une version, comme l'ETag d'iCloud."""
+    return hashlib.sha1(ics.encode()).hexdigest()
 
 
 def _as_datetime(value, tz):
