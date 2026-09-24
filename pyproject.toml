@@ -1,0 +1,27 @@
+[project]
+name = "icloud-calendar-mcp"
+version = "0.1.0"
+description = "Serveur MCP local pour lire et écrire dans l'agenda iCloud (CalDAV)"
+authors = [
+    { name = "Josseaume", email = "arthur.josseaume.dev@gmail.com" }
+]
+requires-python = ">=3.13"
+dependencies = [
+    "caldav>=3.3.1",
+    "mcp>=2.2.0",
+]
+
+[project.scripts]
+icloud-calendar-mcp = "icloud_calendar_mcp:main"
+
+[build-system]
+requires = ["uv_build>=0.12.18,<0.13.0"]
+build-backend = "uv_build"
+
+[dependency-groups]
+dev = [
+    "pytest>=9.1.1",
+]
+
+[tool.pytest.ini_options]
+testpaths = ["tests"]

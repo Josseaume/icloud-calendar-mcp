@@ -1,0 +1,16 @@
+# Environnement Python local (recréé à la demande par uv)
+.venv/
+__pycache__/
+*.pyc
+.pytest_cache/
+
+# Secrets : le mot de passe vit dans le Trousseau macOS, jamais dans le dépôt.
+# Ces lignes sont un filet de sécurité si un de ces fichiers était créé par erreur.
+.env
+.env.*
+*.pem
+*.key
+
+# La vraie config (avec ton Apple ID) vit dans ~/.config/icloud-calendar-mcp/,
+# pas ici. Seul config.example.toml est versionné.
+config.toml
