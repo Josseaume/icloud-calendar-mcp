@@ -8,6 +8,7 @@ import pytest
 
 from icloud_calendar_mcp.backend import BackendError, CalendarRef, validate_event_id
 from icloud_calendar_mcp.config import parse_config
+from icloud_calendar_mcp.created import CreatedCalendars
 from icloud_calendar_mcp.service import CalendarService
 
 CONFIG = {
@@ -89,6 +90,16 @@ class FakeBackend:
         del store[event_id]
         self.writes.append(("delete", ref.name, event_id))
 
+    def make_calendar(self, name, color):
+        ref = CalendarRef(name=name, url=f"https://fake/new-{len(self.calendars)}/")
+        self.calendars.append(ref)
+        self.store[ref.url] = {}
+        self.writes.append(("make_calendar", name, color))
+        return ref
+
+    def set_color(self, ref, color):
+        self.writes.append(("set_color", ref.name, color))
+
     def ics(self, calendar_name, event_id):
         ref = next(c for c in self.calendars if c.name == calendar_name)
         return self.store[ref.url][event_id]
@@ -132,8 +143,13 @@ NOW = datetime(2026, 9, 24, 8, 0, tzinfo=timezone.utc)
 
 
 @pytest.fixture
-def service(backend, config):
-    return CalendarService(backend, config, clock=lambda: NOW)
+def created(tmp_path):
+    return CreatedCalendars(tmp_path / "created_calendars.json")
+
+
+@pytest.fixture
+def service(backend, config, created):
+    return CalendarService(backend, config, created, clock=lambda: NOW)
 
 
 @pytest.fixture

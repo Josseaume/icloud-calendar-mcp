@@ -40,7 +40,7 @@ def test_periode_trop_longue(service):
         service.list_events("2026-09-01", "2027-01-31")
 
 
-def test_deux_calendriers_de_meme_nom_refuses(config):
-    service = CalendarService(FakeBackend(["Perso", "perso"]), config)
+def test_deux_calendriers_de_meme_nom_refuses(config, created):
+    service = CalendarService(FakeBackend(["Perso", "perso"]), config, created)
     with pytest.raises(ServiceError, match="Plusieurs"):
         service.list_events("2026-09-28", "2026-09-29", calendar="Perso")

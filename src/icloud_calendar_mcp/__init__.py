@@ -9,6 +9,7 @@ import sys
 
 from .backend import BackendError, CaldavBackend
 from .config import ConfigError, config_path, load_config, normalize
+from .created import CreatedCalendars
 from .keychain import KeychainError, read_password
 
 
@@ -39,11 +40,14 @@ def check() -> int:
         return 1
 
     print(f"iCloud    : connecté, {len(calendars)} calendrier(s) d'événements")
+    created = CreatedCalendars(config_path().parent / "created_calendars.json")
     for cal in sorted(calendars, key=lambda c: normalize(c.name)):
         if config.is_protected(cal.name):
             mode = "PROTÉGÉ (lecture seule)"
         elif config.can_write(cal.name):
             mode = "écriture"
+        elif created.contains(cal.url):
+            mode = "écriture (créé par Claude)"
         else:
             mode = "lecture seule"
         print(f"  - {cal.name:<32} {mode}")

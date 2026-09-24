@@ -16,6 +16,7 @@ from urllib.parse import quote, unquote, urlsplit
 
 import caldav
 import icalendar
+from caldav.elements.ical import CalendarColor
 from caldav.lib import error as caldav_error
 
 # En mode DEBUG, ces bibliothèques peuvent journaliser des en-têtes HTTP,
@@ -116,6 +117,22 @@ class CaldavBackend:
                 # strip() : iCloud garde parfois un espace en fin de nom (« Soirée »).
                 refs.append(CalendarRef(name=(cal.get_display_name() or url).strip(), url=url))
             return refs
+
+    def make_calendar(self, name: str, color: str | None) -> CalendarRef:
+        """Crée un calendrier d'événements (visible sur Mac et iPhone)."""
+        with self._errors():
+            cal = self._get_principal().make_calendar(name=name, supported_calendar_component_set=["VEVENT"])
+            if color:
+                cal.set_properties([CalendarColor(color)])
+            url = str(cal.url)
+            self._calendars[url] = cal
+            self._holds_events[url] = True
+            return CalendarRef(name=name, url=url)
+
+    def set_color(self, ref: CalendarRef, color: str) -> None:
+        """Couleur au format Apple « #RRGGBBAA » (propriété calendar-color)."""
+        with self._errors():
+            self._calendar(ref).set_properties([CalendarColor(color)])
 
     def _calendar(self, ref: CalendarRef) -> caldav.Calendar:
         if ref.url not in self._calendars:

@@ -5,6 +5,7 @@ fichier qui décide ce qui est autorisé. Il parle à un « backend » (le vrai
 iCloud, ou un faux en mémoire pendant les tests).
 """
 
+import re
 import uuid
 from collections.abc import Callable
 from dataclasses import dataclass
@@ -14,6 +15,7 @@ import icalendar
 
 from .backend import CalendarRef, validate_event_id
 from .config import Config, normalize
+from .created import MAX_CREATED, CreatedCalendars
 from .events import (
     LOCATION_MAX,
     NOTES_MAX,
@@ -34,6 +36,22 @@ from .events import (
 # Une recherche couvre au plus ~3 mois : au-delà, Claude doit découper.
 MAX_RANGE = timedelta(days=92)
 
+# Palette de l'app Calendrier d'Apple.
+COLORS = {"rouge": "#FF2968", "orange": "#FF9500", "jaune": "#FFCC00", "vert": "#63DA38",
+          "bleu": "#1BADF8", "violet": "#CC73E1", "marron": "#A2845E"}
+_HEX_COLOR = re.compile(r"#?([0-9A-Fa-f]{6})")
+
+
+def parse_color(value: str) -> str:
+    """« vert » ou « #63DA38 » -> « #63DA38FF » (format Apple, opacité incluse)."""
+    named = COLORS.get(normalize(value))
+    if named:
+        return named + "FF"
+    match = _HEX_COLOR.fullmatch(value.strip())
+    if match:
+        return "#" + match.group(1).upper() + "FF"
+    raise EventInputError(f"Couleur inconnue. Au choix : {', '.join(COLORS)}, ou un code #RRGGBB.")
+
 
 class ServiceError(RuntimeError):
     """Refus ou erreur à expliquer à Claude (message sûr, en français)."""
@@ -51,9 +69,11 @@ class DeletionTarget:
 
 
 class CalendarService:
-    def __init__(self, backend, config: Config, clock: Callable[[], datetime] | None = None):
+    def __init__(self, backend, config: Config, created: CreatedCalendars,
+                 clock: Callable[[], datetime] | None = None):
         self.backend = backend
         self.config = config
+        self.created = created
         self.clock = clock or (lambda: datetime.now(timezone.utc))
 
     # --- lecture ------------------------------------------------------------
@@ -64,7 +84,7 @@ class CalendarService:
             entry = {"name": cal.name, "writable": self._can_write(cal)}
             if self.config.is_protected(cal.name):
                 entry["protected"] = True
-            usage = self.config.usage(cal.name)
+            usage = self.config.usage(cal.name) or self.created.usage(cal.url)
             if usage:
                 entry["usage"] = usage
             result.append(entry)
@@ -259,6 +279,40 @@ class CalendarService:
         self.backend.delete(target.calendar, target.event_id, target.etag)
         return {"deleted": True, "event": target.summary}
 
+    # --- gestion des calendriers ----------------------------------------------
+
+    def create_calendar(self, name: str, color: str | None = None, usage: str | None = None) -> dict:
+        name = clean_text(name, "Le nom", 50)
+        if not name:
+            raise EventInputError("Le nom du calendrier est obligatoire.")
+        if self.config.is_protected(name):
+            raise ServiceError(f"« {name} » est le nom d'un calendrier protégé.")
+        if any(normalize(c.name) == normalize(name) for c in self.backend.list_calendars()):
+            # Deux calendriers du même nom rendraient les droits ambigus.
+            raise ServiceError(f"Un calendrier « {name} » existe déjà.")
+        if self.created.count() >= MAX_CREATED:
+            raise ServiceError(
+                f"Limite atteinte : Claude a déjà créé {MAX_CREATED} calendriers. "
+                "Crée les suivants dans l'app Calendrier."
+            )
+        color_code = parse_color(color) if color else None
+        usage = clean_text(usage, "L'usage", 200)
+
+        ref = self.backend.make_calendar(name, color_code)
+        self.created.add(ref.url, ref.name, usage)
+        result = {"name": ref.name, "writable": True}
+        if color_code:
+            result["color"] = color_code
+        if usage:
+            result["usage"] = usage
+        return {"created_calendar": result}
+
+    def set_calendar_color(self, calendar: str, color: str) -> dict:
+        ref = self._writable_calendar(calendar)
+        color_code = parse_color(color)
+        self.backend.set_color(ref, color_code)
+        return {"calendar": ref.name, "color": color_code}
+
     # --- outils internes ----------------------------------------------------
 
     def _find_calendar(self, name: str) -> CalendarRef:
@@ -276,4 +330,7 @@ class CalendarService:
         return matches[0]
 
     def _can_write(self, cal: CalendarRef) -> bool:
-        return self.config.can_write(cal.name)
+        """Modifiable = dans la liste blanche OU créé par Claude. Protégé = jamais."""
+        if self.config.is_protected(cal.name):
+            return False
+        return self.config.can_write(cal.name) or self.created.contains(cal.url)
