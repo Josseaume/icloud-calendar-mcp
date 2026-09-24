@@ -39,3 +39,25 @@ async def test_erreur_lisible_pour_claude(service):
         result = await client.call_tool("list_events", {"start": "lundi", "end": "mardi"})
     assert result.is_error
     assert "Date illisible" in result.content[0].text
+
+
+async def test_annotations_des_outils_d_ecriture(service):
+    async with Client(build_server(service)) as client:
+        tools = {t.name: t for t in (await client.list_tools()).tools}
+    assert tools["create_event"].annotations.destructive_hint is False
+    assert tools["update_event"].annotations.destructive_hint is True
+    assert "calendar" in tools["create_event"].input_schema["required"]
+
+
+async def test_creation_via_mcp_et_refus_esiee(service, backend):
+    async with Client(build_server(service)) as client:
+        ok = await client.call_tool("create_event", {
+            "calendar": "Perso", "title": "Basic Fit",
+            "start": "2026-09-28T18:00", "end": "2026-09-28T19:30"})
+        refused = await client.call_tool("create_event", {
+            "calendar": "Cours ESIEE", "title": "x",
+            "start": "2026-09-28T18:00", "end": "2026-09-28T19:30"})
+    assert not ok.is_error
+    assert json.loads(ok.content[0].text)["created"]["when"] == "lundi 28 septembre 2026, 18:00 – 19:30"
+    assert refused.is_error and "protégé" in refused.content[0].text
+    assert [w[0] for w in backend.writes] == ["create"]

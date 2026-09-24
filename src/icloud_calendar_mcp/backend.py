@@ -5,12 +5,14 @@ permet de tout tester avec un faux iCloud en mémoire (voir tests/).
 """
 
 import logging
+import re
 import threading
 from collections.abc import Callable, Iterator
+from typing import TypeVar
 from contextlib import contextmanager
 from dataclasses import dataclass
 from datetime import datetime
-from urllib.parse import unquote, urlsplit
+from urllib.parse import quote, unquote, urlsplit
 
 import caldav
 import icalendar
@@ -20,6 +22,9 @@ from caldav.lib import error as caldav_error
 # dont celui qui porte le mot de passe. On ne garde que les avertissements.
 for _name in ("caldav", "niquests", "urllib3"):
     logging.getLogger(_name).setLevel(logging.WARNING)
+
+
+T = TypeVar("T")
 
 
 class BackendError(RuntimeError):
@@ -135,6 +140,46 @@ class CaldavBackend:
                 for comp in obj.get_icalendar_instance().walk("VEVENT"):
                     pairs.append((event_id, comp))
             return pairs
+
+    def create(self, ref: CalendarRef, ical: str) -> str:
+        """Enregistre un nouvel événement (texte .ics) ; renvoie son event_id."""
+        with self._errors():
+            event = self._calendar(ref).add_event(ical)
+            return event_id_from_url(str(event.url))
+
+    def update(self, ref: CalendarRef, event_id: str, mutate: Callable[[icalendar.Calendar], T]) -> T:
+        """Relit l'événement, le passe à `mutate` pour modification, puis l'enregistre.
+
+        L'enregistrement envoie l'« ETag » lu (sa version) : si l'événement a été
+        modifié ailleurs entre-temps, iCloud refuse au lieu d'écraser.
+        Les erreurs levées par `mutate` (refus de sécurité) remontent telles quelles.
+        """
+        url = event_url(ref, event_id)
+        with self._errors():
+            event = self._calendar(ref).event_by_url(url)
+        with event.edit_icalendar_instance() as ical:
+            result = mutate(ical)
+        with self._errors():
+            event.save()
+        return result
+
+
+# Caractères autorisés dans un event_id. Il vient de Claude, donc peut-être
+# d'une injection : sans ce filtre, « ../autre-calendrier/x.ics » ferait
+# sortir de l'adresse du calendrier autorisé (attaque « path traversal »).
+_EVENT_ID = re.compile(r"[A-Za-z0-9][A-Za-z0-9._@+=~-]{0,250}")
+
+
+def validate_event_id(event_id: str) -> str:
+    if not isinstance(event_id, str) or not _EVENT_ID.fullmatch(event_id):
+        raise BackendError(f"event_id invalide : {event_id!r:.80}")
+    return event_id
+
+
+def event_url(ref: CalendarRef, event_id: str) -> str:
+    """Adresse d'un événement, forcément À L'INTÉRIEUR du calendrier `ref`."""
+    base = ref.url if ref.url.endswith("/") else ref.url + "/"
+    return base + quote(validate_event_id(event_id), safe="._@+=~-")
 
 
 def event_id_from_url(url: str) -> str:

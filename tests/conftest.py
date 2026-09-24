@@ -1,11 +1,11 @@
 """Faux iCloud en mémoire, pour tester toutes les règles sans réseau."""
 
-from datetime import date, datetime, time, timedelta
+from datetime import date, datetime, time, timedelta, timezone
 
 import icalendar
 import pytest
 
-from icloud_calendar_mcp.backend import BackendError, CalendarRef
+from icloud_calendar_mcp.backend import BackendError, CalendarRef, validate_event_id
 from icloud_calendar_mcp.config import parse_config
 from icloud_calendar_mcp.service import CalendarService
 
@@ -53,6 +53,28 @@ class FakeBackend:
                     pairs.append((event_id, comp))
         return pairs
 
+    def create(self, ref, ical):
+        uid = str(icalendar.Calendar.from_ical(ical).walk("VEVENT")[0]["UID"])
+        event_id = f"{uid}.ics"
+        self._ref(ref)[event_id] = ical
+        self.writes.append(("create", ref.name, event_id))
+        return event_id
+
+    def update(self, ref, event_id, mutate):
+        validate_event_id(event_id)
+        store = self._ref(ref)
+        if event_id not in store:
+            raise BackendError("Élément introuvable sur iCloud.")
+        ical = icalendar.Calendar.from_ical(store[event_id])
+        result = mutate(ical)
+        store[event_id] = ical.to_ical().decode()
+        self.writes.append(("update", ref.name, event_id))
+        return result
+
+    def ics(self, calendar_name, event_id):
+        ref = next(c for c in self.calendars if c.name == calendar_name)
+        return self.store[ref.url][event_id]
+
     def _ref(self, ref):
         if ref.url not in self.store:
             raise BackendError("calendrier inconnu")
@@ -82,9 +104,13 @@ def backend():
     return FakeBackend(["Perso", "Travaille", "Cours ESIEE", "Autre"])
 
 
+# « Maintenant », figé pour les tests : jeudi 24 septembre 2026, 10:00 à Paris.
+NOW = datetime(2026, 9, 24, 8, 0, tzinfo=timezone.utc)
+
+
 @pytest.fixture
 def service(backend, config):
-    return CalendarService(backend, config)
+    return CalendarService(backend, config, clock=lambda: NOW)
 
 
 @pytest.fixture

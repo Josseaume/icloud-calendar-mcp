@@ -5,6 +5,7 @@ Ce module le lit (pour list_events) et l'écrit (pour create/update), et gère
 les dates : fuseau horaire, journées entières, affichage en français.
 """
 
+import uuid
 from dataclasses import dataclass
 from datetime import date, datetime, time, timedelta
 from zoneinfo import ZoneInfo
@@ -174,3 +175,115 @@ def describe_when(start: datetime | date, end: datetime | date, all_day: bool) -
     if start.date() == end.date():
         return f"{describe_day(start)}, {start:%H:%M} – {end:%H:%M}"
     return f"du {describe_day(start)} {start:%H:%M} au {describe_day(end)} {end:%H:%M}"
+
+
+# --- écriture -------------------------------------------------------------------
+
+PRODID = "-//Arthur//icloud-calendar-mcp//FR"
+TITLE_MAX, LOCATION_MAX, NOTES_MAX = 200, 300, 4000
+MAX_DURATION = timedelta(days=14)
+ALERT_MAX_MINUTES = 7 * 24 * 60
+
+
+def clean_text(value: str | None, field: str, max_len: int, multiline: bool = False) -> str | None:
+    """Nettoie un texte venant de Claude avant de l'écrire dans iCloud.
+
+    On retire les caractères de contrôle invisibles (sauf les retours à la
+    ligne des notes) : ils n'ont rien à faire dans un agenda et servent
+    parfois à cacher des choses.
+    """
+    if value is None:
+        return None
+    allowed = "\n\t" if multiline else "\t"
+    text = "".join(
+        ch for ch in value.replace("\r\n", "\n")
+        if ch.isprintable() or ch in allowed
+    ).strip()
+    if not multiline:
+        text = " ".join(text.split())
+    if len(text) > max_len:
+        raise EventInputError(f"{field} trop long ({max_len} caractères maximum).")
+    return text
+
+
+def event_times(start: str, end: str | None, all_day: bool, tz: ZoneInfo) -> tuple[datetime | date, datetime | date]:
+    """Valide début/fin d'un événement. Pour une journée entière, `end` = dernier jour inclus."""
+    start_value = parse_when(start, tz)
+    end_value = parse_when(end, tz) if end else None
+
+    if all_day:
+        start_day = start_value.date() if isinstance(start_value, datetime) else start_value
+        end_day = end_value.date() if isinstance(end_value, datetime) else (end_value or start_day)
+        if end_day < start_day:
+            raise EventInputError("Le dernier jour doit être le même jour ou après le premier.")
+        if end_day - start_day > MAX_DURATION:
+            raise EventInputError("Durée trop longue (14 jours maximum).")
+        return start_day, end_day
+
+    if not isinstance(start_value, datetime) or (end_value is not None and not isinstance(end_value, datetime)):
+        raise EventInputError("Donne une heure (2026-09-28T18:00), ou all_day=true pour une journée entière.")
+    if end_value is None:
+        raise EventInputError("Donne l'heure de fin (end) : c'est obligatoire pour un événement avec horaire.")
+    check_duration(start_value, end_value)
+    return start_value, end_value
+
+
+def check_duration(start: datetime, end: datetime) -> None:
+    if end <= start:
+        raise EventInputError("La fin doit être après le début.")
+    if end - start > MAX_DURATION:
+        raise EventInputError("Durée trop longue (14 jours maximum) : vérifie les dates.")
+
+
+def build_ical(*, uid: str, title: str, start: datetime | date, end: datetime | date, all_day: bool,
+               location: str | None, notes: str | None, alert_minutes: int | None, now: datetime) -> str:
+    """Fabrique le fichier .ics d'un nouvel événement.
+
+    C'est la bibliothèque icalendar qui écrit le texte : elle échappe les
+    retours à la ligne et les « ; », donc un titre piégé ne peut pas ajouter
+    de ligne (par exemple un invité) dans le fichier.
+    """
+    if alert_minutes is not None and not 0 <= alert_minutes <= ALERT_MAX_MINUTES:
+        raise EventInputError("Rappel : entre 0 et 10080 minutes (une semaine) avant le début.")
+
+    event = icalendar.Event()
+    event.add("uid", uid)
+    for key in ("dtstamp", "created", "last-modified"):
+        event.add(key, now)
+    event.add("summary", title)
+    event.add("dtstart", start)
+    # En iCalendar, la fin d'une journée entière est le lendemain (exclu).
+    event.add("dtend", end + timedelta(days=1) if all_day else end)
+    if location:
+        event.add("location", location)
+    if notes:
+        event.add("description", notes)
+    if alert_minutes is not None:
+        event.add_component(make_alarm(alert_minutes))
+
+    cal = icalendar.Calendar()
+    cal.add("prodid", PRODID)
+    cal.add("version", "2.0")
+    cal.add_component(event)
+    # Ajoute la définition du fuseau Europe/Paris (heure d'été/hiver) dans le
+    # fichier, comme l'exige la norme : l'iPhone affiche alors la bonne heure.
+    cal.add_missing_timezones()
+    return cal.to_ical().decode()
+
+
+def make_alarm(minutes: int) -> icalendar.Alarm:
+    """Notification « N minutes avant », au format attendu par Calendrier."""
+    alarm = icalendar.Alarm()
+    alarm_uid = str(uuid.uuid4()).upper()
+    alarm.add("uid", alarm_uid)
+    alarm.add("x-wr-alarmuid", alarm_uid)
+    alarm.add("action", "DISPLAY")
+    alarm.add("description", "Rappel")
+    alarm.add("trigger", timedelta(minutes=-minutes))
+    return alarm
+
+
+def replace_prop(comp: icalendar.Component, key: str, value) -> None:
+    comp.pop(key, None)
+    if value is not None and value != "":
+        comp.add(key.lower(), value)
