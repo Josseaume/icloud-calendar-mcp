@@ -6,7 +6,7 @@ from icloud_calendar_mcp.service import CalendarService, ServiceError
 
 def test_list_calendars_indique_droits_et_usage(service):
     cals = {c["name"]: c for c in service.list_calendars()}
-    assert cals["Perso"] == {"name": "Perso", "writable": True, "usage": "sport et vie perso"}
+    assert cals["Perso"] == {"name": "Perso", "writable": True, "color": "bleu", "usage": "sport et vie perso"}
     assert cals["Cours ESIEE"]["writable"] is False
     assert cals["Cours ESIEE"]["protected"] is True
     assert cals["Autre"]["writable"] is False

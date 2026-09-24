@@ -13,7 +13,7 @@ from datetime import date, datetime, timedelta, timezone
 
 import icalendar
 
-from .backend import CalendarRef, validate_event_id
+from .backend import CalendarRef, calendar_key, validate_event_id
 from .config import Config, normalize
 from .created import MAX_CREATED, CreatedCalendars
 from .events import (
@@ -40,6 +40,23 @@ MAX_RANGE = timedelta(days=92)
 COLORS = {"rouge": "#FF2968", "orange": "#FF9500", "jaune": "#FFCC00", "vert": "#63DA38",
           "bleu": "#1BADF8", "violet": "#CC73E1", "marron": "#A2845E"}
 _HEX_COLOR = re.compile(r"#?([0-9A-Fa-f]{6})")
+
+
+def describe_color(code: str) -> str:
+    """« #FF9500FF » -> « orange » ; couleur hors palette -> « #EB512E (proche de rouge) »."""
+    hex6 = code.strip().upper()[:7]
+    for name, palette_hex in COLORS.items():
+        if palette_hex == hex6:
+            return name
+    try:
+        rgb = [int(hex6[i:i + 2], 16) for i in (1, 3, 5)]
+    except ValueError:
+        return code
+    def distance(palette_hex: str) -> int:
+        other = [int(palette_hex[i:i + 2], 16) for i in (1, 3, 5)]
+        return sum((a - b) ** 2 for a, b in zip(rgb, other))
+    nearest = min(COLORS, key=lambda name: distance(COLORS[name]))
+    return f"{hex6} (proche de {nearest})"
 
 
 def parse_color(value: str) -> str:
@@ -79,9 +96,13 @@ class CalendarService:
     # --- lecture ------------------------------------------------------------
 
     def list_calendars(self) -> list[dict]:
+        colors = self.backend.calendar_colors()
         result = []
         for cal in sorted(self.backend.list_calendars(), key=lambda c: normalize(c.name)):
             entry = {"name": cal.name, "writable": self._can_write(cal)}
+            color = colors.get(calendar_key(cal.url))
+            if color:
+                entry["color"] = describe_color(color)
             if self.config.is_protected(cal.name):
                 entry["protected"] = True
             usage = self.config.usage(cal.name) or self.created.usage(cal.url)
@@ -308,10 +329,14 @@ class CalendarService:
         return {"created_calendar": result}
 
     def set_calendar_color(self, calendar: str, color: str) -> dict:
-        ref = self._writable_calendar(calendar)
+        """La couleur est un réglage d'affichage, pas une donnée : elle est permise
+        sur tous les calendriers, même en lecture seule, sauf les protégés."""
+        if self.config.is_protected(calendar):
+            raise ServiceError(f"« {calendar.strip()} » est protégé : aucune modification, même de couleur.")
+        ref = self._find_calendar(calendar)
         color_code = parse_color(color)
         self.backend.set_color(ref, color_code)
-        return {"calendar": ref.name, "color": color_code}
+        return {"calendar": ref.name, "color": describe_color(color_code)}
 
     # --- outils internes ----------------------------------------------------
 

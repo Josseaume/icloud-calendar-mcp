@@ -33,13 +33,13 @@ Claude ──(MCP, stdin/stdout)──▶ serveur local ──(HTTPS, CalDAV)─
 
 | Outil | Rôle |
 |---|---|
-| `list_calendars` | calendriers, droits, à quoi ils servent |
+| `list_calendars` | calendriers, couleur actuelle, droits, à quoi ils servent |
 | `list_events` | événements d'une période (3 mois max), récurrences dépliées |
 | `create_event` | crée un événement (horaire ou journée entière, lieu, notes, rappel) |
 | `update_event` | modifie un événement (seuls les champs fournis) |
 | `delete_event` | supprime un événement **après ta confirmation** |
 | `create_calendar` | crée un calendrier (nom, couleur, usage) |
-| `set_calendar_color` | change la couleur d'un calendrier modifiable |
+| `set_calendar_color` | change la couleur d'un calendrier (tous sauf les protégés) |
 
 ## Sécurité : les choix et pourquoi
 
@@ -70,7 +70,8 @@ Claude ──(MCP, stdin/stdout)──▶ serveur local ──(HTTPS, CalDAV)─
    jamais rien à personne. Les événements avec invités ou récurrents ne sont ni
    modifiés ni supprimés (à faire dans l'app Calendrier).
 10. **Pas de suppression ni de renommage de calendrier** par Claude, et au plus
-    10 calendriers créés.
+    10 calendriers créés. La couleur, simple réglage d'affichage, peut être changée
+    sur tous les calendriers, même en lecture seule, sauf les protégés.
 
 ## Installation (sur un Mac)
 
@@ -119,7 +120,7 @@ terminal. Redémarre Claude Desktop ensuite.
 ## Tests
 
 ```sh
-uv run pytest        # 99 tests, sans réseau (faux iCloud en mémoire)
+uv run pytest        # 103 tests, sans réseau (faux iCloud en mémoire)
 ```
 
 ## Désinstaller proprement
@@ -138,5 +139,7 @@ Puis révoque le mot de passe pour app sur appleid.apple.com.
 ## Limites connues
 
 - Événements récurrents et événements avec invités : lecture seule.
+- `caldav` 3.3.1 retire en silence `calendar-color` de ses requêtes PROPFIND
+  publiques : les couleurs sont lues via une méthode interne (avec un repli).
 - Lecture du mot de passe : macOS uniquement pour l'instant (sur le mini-PC
   Linux, il faudra un autre coffre, par exemple Secret Service).

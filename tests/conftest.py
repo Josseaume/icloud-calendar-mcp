@@ -6,7 +6,7 @@ from datetime import date, datetime, time, timedelta, timezone
 import icalendar
 import pytest
 
-from icloud_calendar_mcp.backend import BackendError, CalendarRef, validate_event_id
+from icloud_calendar_mcp.backend import BackendError, CalendarRef, calendar_key, validate_event_id
 from icloud_calendar_mcp.config import parse_config
 from icloud_calendar_mcp.created import CreatedCalendars
 from icloud_calendar_mcp.service import CalendarService
@@ -39,6 +39,7 @@ class FakeBackend:
         self.calendars = [CalendarRef(name=n, url=f"https://fake/{i}/") for i, n in enumerate(names)]
         self.store: dict[str, dict[str, str]] = {c.url: {} for c in self.calendars}
         self.writes: list[tuple] = []  # journal de toutes les écritures
+        self.colors = {c.url: "#1BADF8FF" for c in self.calendars}
 
     def add(self, calendar_name, event_id, ics):
         ref = next(c for c in self.calendars if c.name == calendar_name)
@@ -94,11 +95,17 @@ class FakeBackend:
         ref = CalendarRef(name=name, url=f"https://fake/new-{len(self.calendars)}/")
         self.calendars.append(ref)
         self.store[ref.url] = {}
+        if color:
+            self.colors[ref.url] = color
         self.writes.append(("make_calendar", name, color))
         return ref
 
     def set_color(self, ref, color):
+        self.colors[ref.url] = color
         self.writes.append(("set_color", ref.name, color))
+
+    def calendar_colors(self):
+        return {calendar_key(url): color for url, color in self.colors.items()}
 
     def ics(self, calendar_name, event_id):
         ref = next(c for c in self.calendars if c.name == calendar_name)

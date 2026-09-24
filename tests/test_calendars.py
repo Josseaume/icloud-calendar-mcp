@@ -3,7 +3,7 @@ import json
 import pytest
 
 from icloud_calendar_mcp.events import EventInputError
-from icloud_calendar_mcp.service import ServiceError, parse_color
+from icloud_calendar_mcp.service import ServiceError, describe_color, parse_color
 
 
 def test_creer_un_calendrier_puis_y_ecrire(service, backend, created):
@@ -43,7 +43,7 @@ def test_limite_anti_emballement(service, backend):
 
 
 def test_couleur_calendrier_modifiable(service, backend):
-    assert service.set_calendar_color("Perso", "violet") == {"calendar": "Perso", "color": "#CC73E1FF"}
+    assert service.set_calendar_color("Perso", "violet") == {"calendar": "Perso", "color": "violet"}
     assert backend.writes == [("set_color", "Perso", "#CC73E1FF")]
 
 
@@ -53,9 +53,31 @@ def test_couleur_refusee_sur_cours_esiee(service, backend):
     assert backend.writes == []
 
 
-def test_couleur_refusee_hors_liste_blanche(service, backend):
+def test_couleur_permise_sur_un_calendrier_en_lecture_seule(service, backend):
+    """Bug remonté par Arthur : « Autre » est en lecture seule, mais sa couleur
+    n'est qu'un réglage d'affichage. Ses événements, eux, restent protégés."""
+    assert service.set_calendar_color("Autre", "marron")["color"] == "marron"
     with pytest.raises(ServiceError, match="lecture seule"):
-        service.set_calendar_color("Autre", "rouge")
+        service.create_event("Autre", "x", "2026-09-28T18:00", "2026-09-28T19:00")
+    assert backend.writes == [("set_color", "Autre", "#A2845EFF")]
+
+
+def test_couleur_visible_dans_la_liste(service, backend):
+    """Bug remonté par Arthur : Claude ne pouvait pas savoir lequel est « le orange »."""
+    autre = next(c for c in backend.calendars if c.name == "Autre")
+    backend.colors[autre.url] = "#FF9500FF"
+    cals = {c["name"]: c for c in service.list_calendars()}
+    assert cals["Autre"]["color"] == "orange"
+    assert cals["Perso"]["color"] == "bleu"
+
+
+@pytest.mark.parametrize("code,expected", [
+    ("#FF9500FF", "orange"),
+    ("#EB512EFF", "#EB512E (proche de rouge)"),
+    ("#83D754FF", "#83D754 (proche de vert)"),
+])
+def test_describe_color(code, expected):
+    assert describe_color(code) == expected
 
 
 def test_fichier_memoire_ne_rend_pas_esiee_modifiable(service, backend, created):

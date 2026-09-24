@@ -14,17 +14,12 @@ import json
 import os
 import tempfile
 from pathlib import Path
-from urllib.parse import urlsplit
+
+from .backend import calendar_key
 
 # Limite anti-emballement : si Claude se mettait à créer des calendriers en
 # boucle (bug, texte piégé...), il serait arrêté au bout de 10.
 MAX_CREATED = 10
-
-
-def calendar_key(url: str) -> str:
-    """Seul le chemin identifie un calendrier : iCloud répond tantôt depuis
-    « caldav.icloud.com », tantôt depuis « p130-caldav.icloud.com:443 »."""
-    return urlsplit(url).path.rstrip("/") + "/"
 
 
 class CreatedCalendars:

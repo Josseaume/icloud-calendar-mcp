@@ -27,6 +27,9 @@ for _name in ("caldav", "niquests", "urllib3"):
 
 T = TypeVar("T")
 
+# Propriété Apple qui porte la couleur d'un calendrier (notation {espace}nom).
+_COLOR_PROP = "{http://apple.com/ns/ical/}calendar-color"
+
 
 class BackendError(RuntimeError):
     """Erreur iCloud, avec un message sûr (jamais de mot de passe dedans)."""
@@ -117,6 +120,22 @@ class CaldavBackend:
                 # strip() : iCloud garde parfois un espace en fin de nom (« Soirée »).
                 refs.append(CalendarRef(name=(cal.get_display_name() or url).strip(), url=url))
             return refs
+
+    def calendar_colors(self) -> dict[str, str]:
+        """Couleur de chaque calendrier : {chemin: "#RRGGBBAA"}."""
+        with self._errors():
+            home = self._get_principal().calendar_home_set
+            try:
+                # Une seule requête pour tous les calendriers. On passe par une
+                # méthode interne de caldav : la méthode publique client.propfind()
+                # retire en silence la propriété calendar-color (bug de caldav 3.3.1).
+                results = home._query_properties([CalendarColor()], 1).results or []
+                pairs = [(calendar_key(r.href), r.properties.get(_COLOR_PROP)) for r in results]
+            except AttributeError:
+                # Repli si caldav change de fonctionnement : une requête par calendrier.
+                pairs = [(calendar_key(url), cal.get_property(CalendarColor()))
+                         for url, cal in self._calendars.items()]
+            return {key: color.strip() for key, color in pairs if isinstance(color, str) and color.strip()}
 
     def make_calendar(self, name: str, color: str | None) -> CalendarRef:
         """Crée un calendrier d'événements (visible sur Mac et iPhone)."""
@@ -225,6 +244,12 @@ def event_url(ref: CalendarRef, event_id: str) -> str:
     """Adresse d'un événement, forcément À L'INTÉRIEUR du calendrier `ref`."""
     base = ref.url if ref.url.endswith("/") else ref.url + "/"
     return base + quote(validate_event_id(event_id), safe="._@+=~-")
+
+
+def calendar_key(url: str) -> str:
+    """Seul le chemin identifie un calendrier : iCloud répond tantôt depuis
+    « caldav.icloud.com », tantôt depuis « p130-caldav.icloud.com:443 »."""
+    return urlsplit(url).path.rstrip("/") + "/"
 
 
 def event_id_from_url(url: str) -> str:
