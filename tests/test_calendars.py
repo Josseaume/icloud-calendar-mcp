@@ -75,3 +75,10 @@ def test_parse_color(value, expected):
 def test_couleur_inconnue():
     with pytest.raises(EventInputError, match="Couleur inconnue"):
         parse_color("fuchsia fluo")
+
+
+def test_reconnu_meme_si_icloud_change_de_serveur(created):
+    """Bug vu en vrai : même calendrier, adresse différente selon la session."""
+    created.add("https://p130-caldav.icloud.com:443/123/calendars/abc/", "Sport", None)
+    assert created.contains("https://caldav.icloud.com/123/calendars/abc/")
+    assert not created.contains("https://caldav.icloud.com/123/calendars/autre/")
