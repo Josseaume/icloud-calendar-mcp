@@ -21,12 +21,12 @@ def basic_fit(backend, paris):
     return "bf.ics"
 
 
-def elicitation(action, confirmer=None, questions=None):
+def elicitation(action, garder=None, questions=None):
     """Simule Arthur qui répond dans la fenêtre de Claude Code."""
     async def callback(context, params):
         if questions is not None:
             questions.append(params.message)
-        content = None if confirmer is None else {"confirmer": confirmer}
+        content = None if garder is None else {"garder": garder}
         return ElicitResult(action=action, content=content)
     return callback
 
@@ -66,23 +66,31 @@ PROTOCOLS = pytest.mark.parametrize("mode", ["auto", "legacy"])
 
 
 @PROTOCOLS
-async def test_confirmation_dans_claude_code(service, backend, basic_fit, mode):
+async def test_accepter_suffit_pour_supprimer(service, backend, basic_fit, mode):
+    """Bug vécu par Arthur : il acceptait sans cocher la case, et rien ne se passait.
+    Désormais « Accepter » (case laissée décochée, comme renvoyé par Claude Code) supprime."""
     questions = []
     result = await delete(service, {"calendar": "Perso", "event_id": basic_fit}, mode=mode,
-                          elicitation_callback=elicitation("accept", True, questions))
+                          elicitation_callback=elicitation("accept", False, questions))
     assert not result.is_error
     assert '"deleted": true' in result.content[0].text
     assert not still_there(backend, basic_fit)
     assert "« Basic Fit »" in questions[0]
     assert "lundi 28 septembre 2026, 18:00 – 19:30" in questions[0]
+    assert "Accepter = supprimer" in questions[0]
 
 
 @PROTOCOLS
-@pytest.mark.parametrize("action,confirmer", [("decline", None), ("cancel", None), ("accept", False)])
-async def test_refus_dans_claude_code(service, backend, basic_fit, action, confirmer, mode):
+@pytest.mark.parametrize("action,garder,reason", [
+    ("decline", None, "a refusé"),
+    ("cancel", None, "sans répondre"),
+    ("accept", True, "garder l'événement"),
+])
+async def test_refus_dans_claude_code(service, backend, basic_fit, action, garder, reason, mode):
     result = await delete(service, {"calendar": "Perso", "event_id": basic_fit}, mode=mode,
-                          elicitation_callback=elicitation(action, confirmer))
+                          elicitation_callback=elicitation(action, garder))
     assert '"deleted": false' in result.content[0].text
+    assert reason in result.content[0].text  # Claude peut expliquer la vraie cause
     assert still_there(backend, basic_fit)
     assert backend.writes == []
 
@@ -98,6 +106,7 @@ async def test_fenetre_macos_quand_le_client_ne_sait_pas_demander(service, backe
 async def test_fenetre_macos_refus(service, backend, basic_fit):
     result = await delete(service, {"calendar": "Perso", "event_id": basic_fit}, native_confirm=native(False))
     assert '"deleted": false' in result.content[0].text
+    assert "fenêtre macOS" in result.content[0].text
     assert still_there(backend, basic_fit)
 
 
@@ -105,7 +114,7 @@ async def test_cours_esiee_refuse_sans_meme_poser_la_question(service, backend, 
     backend.add("Cours ESIEE", "c.ics", make_ics("c", "Pentest", at(paris, 2026, 9, 28, 8), at(paris, 2026, 9, 28, 10)))
     questions = []
     result = await delete(service, {"calendar": "Cours ESIEE", "event_id": "c.ics"},
-                          elicitation_callback=elicitation("accept", True, questions))
+                          elicitation_callback=elicitation("accept", False, questions))
     assert result.is_error and "protégé" in result.content[0].text
     assert questions == [] and backend.writes == []
 

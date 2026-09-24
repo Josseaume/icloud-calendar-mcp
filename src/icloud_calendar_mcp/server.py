@@ -13,7 +13,9 @@ from typing import Annotated
 
 from mcp.server.mcpserver import (
     AcceptedElicitation,
+    CancelledElicitation,
     Context,
+    DeclinedElicitation,
     Elicit,
     ElicitationResult,
     MCPServer,
@@ -66,9 +68,19 @@ SET = ToolAnnotations(read_only_hint=False, destructive_hint=False, idempotent_h
 
 
 class DeleteConfirmation(BaseModel):
-    """Le formulaire montré à Arthur par le client MCP (une seule case à cocher)."""
+    """Le formulaire montré à Arthur par le client MCP.
 
-    confirmer: bool = Field(default=False, title="Oui, supprimer définitivement")
+    « Accepter » suffit pour supprimer. La case sert seulement à changer d'avis
+    au dernier moment. Avant, il fallait cocher « oui » PUIS accepter : Arthur a
+    accepté deux fois sans cocher, et rien n'a été supprimé.
+    Décochée par défaut : même un client qui ignore les valeurs par défaut
+    renvoie « non coché », donc « Accepter » veut toujours dire « supprimer ».
+    """
+
+    garder: bool = Field(default=False, title="Finalement, garder l'événement")
+
+
+ELICIT_FOOTER = "\n\nAccepter = supprimer · Refuser = garder"
 
 
 def client_can_ask_user(ctx: Context) -> bool:
@@ -202,9 +214,9 @@ def build_server(
         if client_can_ask_user(ctx):
             # Le client (ex. Claude Code) affiche la question à Arthur et renvoie
             # SA réponse ; le modèle ne participe pas à cet échange.
-            return Elicit(target.question, DeleteConfirmation)
+            return Elicit(target.question + ELICIT_FOOTER, DeleteConfirmation)
         # Sinon : fenêtre macOS. Sans Mac (serveur Linux), elle répond « non ».
-        return DeleteConfirmation(confirmer=native_confirm(target.question))
+        return DeleteConfirmation(garder=not native_confirm(target.question))
 
     @mcp.tool(title="Supprimer un événement", annotations=DELETE)
     def delete_event(
@@ -212,16 +224,25 @@ def build_server(
         event_id: Annotated[str, Field(description="Identifiant de l'événement (champ event_id de list_events)")],
         target: Annotated[DeletionTarget, Resolve(load_deletion_target)],
         confirmation: Annotated[ElicitationResult[DeleteConfirmation], Resolve(ask_confirmation)],
+        ctx: Context,
     ) -> dict:
-        """Supprime un événement. Arthur doit confirmer lui-même dans une fenêtre
-        de confirmation : si la réponse est « deleted: false », il a refusé, ne
-        réessaie pas sans qu'il le demande. Refusé pour les événements récurrents
-        ou avec invités, et dans les calendriers en lecture seule."""
-        confirmed = isinstance(confirmation, AcceptedElicitation) and confirmation.data.confirmer
-        if not confirmed:
-            return {"deleted": False, "message": "Suppression annulée : Arthur n'a pas confirmé."}
-        with _tool_errors():
-            return service.delete_event(target)
+        """Supprime un événement. Arthur confirme lui-même (question affichée par
+        Claude Code, ou fenêtre macOS). Si « deleted » vaut false, explique-lui la
+        raison donnée et ne réessaie pas sans qu'il le redemande. Refusé pour les
+        événements récurrents ou avec invités, et dans les calendriers en lecture seule."""
+        if isinstance(confirmation, AcceptedElicitation) and not confirmation.data.garder:
+            with _tool_errors():
+                return service.delete_event(target)
+        # Une raison précise par cas, pour que Claude explique la vraie cause.
+        if isinstance(confirmation, DeclinedElicitation):
+            reason = "Arthur a refusé la suppression."
+        elif isinstance(confirmation, CancelledElicitation):
+            reason = "Arthur a fermé la question sans répondre."
+        elif client_can_ask_user(ctx):
+            reason = "Arthur a coché « Finalement, garder l'événement »."
+        else:
+            reason = "Pas de confirmation dans la fenêtre macOS (« Annuler », ou pas de réponse en 2 minutes)."
+        return {"deleted": False, "reason": reason + " Rien n'a été supprimé."}
 
     return mcp
 

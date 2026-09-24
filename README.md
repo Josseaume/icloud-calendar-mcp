@@ -55,9 +55,9 @@ Claude ──(MCP, stdin/stdout)──▶ serveur local ──(HTTPS, CalDAV)─
 4. **Calendriers protégés** (Cours ESIEE) : lecture seule quoi qu'il arrive, même
    s'ils sont ajoutés par erreur à la liste blanche.
 5. **Suppression confirmée par toi, pas par Claude** : Claude ne voit que
-   `calendar` et `event_id`. La question t'est posée par le client (Claude Code) ou,
-   à défaut, par une fenêtre macOS (« Annuler » par défaut, 2 minutes). Sans
-   réponse : rien n'est supprimé.
+   `calendar` et `event_id`. La question t'est posée par le client (Claude Code :
+   « Accepter » = supprimer, « Refuser » = garder) ou, à défaut, par une fenêtre
+   macOS (« Annuler » par défaut, 2 minutes). Sans réponse : rien n'est supprimé.
 6. **On supprime ce que tu as validé** : la suppression est conditionnelle (ETag).
    Si l'événement a changé entre-temps sur l'iPhone, rien n'est supprimé.
 7. **Données venues de tiers** : titres et notes (invitations, ADE) sont traités
@@ -120,7 +120,7 @@ terminal. Redémarre Claude Desktop ensuite.
 ## Tests
 
 ```sh
-uv run pytest        # 103 tests, sans réseau (faux iCloud en mémoire)
+uv run pytest        # 104 tests, sans réseau (faux iCloud en mémoire)
 ```
 
 ## Désinstaller proprement
@@ -139,6 +139,8 @@ Puis révoque le mot de passe pour app sur appleid.apple.com.
 ## Limites connues
 
 - Événements récurrents et événements avec invités : lecture seule.
+- iCloud propose HTTP/3 (UDP), dont les connexions inactives peuvent être coupées
+  en silence : le serveur force une connexion TCP.
 - `caldav` 3.3.1 retire en silence `calendar-color` de ses requêtes PROPFIND
   publiques : les couleurs sont lues via une méthode interne (avec un repli).
 - Lecture du mot de passe : macOS uniquement pour l'instant (sur le mini-PC

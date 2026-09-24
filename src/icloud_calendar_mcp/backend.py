@@ -16,6 +16,7 @@ from urllib.parse import quote, unquote, urlsplit
 
 import caldav
 import icalendar
+import niquests
 from caldav.elements.ical import CalendarColor
 from caldav.lib import error as caldav_error
 
@@ -70,6 +71,12 @@ class CaldavBackend:
                 password=self._password,
                 timeout=30,
             )
+            # iCloud propose HTTP/3, qui passe en UDP. Une connexion UDP inactive peut
+            # être coupée en silence par la box ou le réseau : la requête suivante
+            # reste alors bloquée jusqu'au délai (vu le 24/09/2026). On reste en TCP
+            # (HTTP/1.1 ou 2), qui détecte les coupures. caldav passe l'authentification
+            # à chaque requête, donc remplacer la session ne change rien d'autre.
+            self._client.session = niquests.Session(disable_http3=True)
             # « principal » = ton compte vu par CalDAV ; c'est lui qui connaît
             # la liste de tes calendriers.
             self._principal = self._client.principal()

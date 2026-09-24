@@ -401,6 +401,7 @@ source = { editable = "." }
 dependencies = [
     { name = "caldav" },
     { name = "mcp" },
+    { name = "niquests" },
 ]
 
 [package.dev-dependencies]
@@ -412,6 +413,7 @@ dev = [
 requires-dist = [
     { name = "caldav", specifier = ">=3.3.1" },
     { name = "mcp", specifier = ">=2.2.0" },
+    { name = "niquests", specifier = ">=3.21.2" },
 ]
 
 [package.metadata.requires-dev]

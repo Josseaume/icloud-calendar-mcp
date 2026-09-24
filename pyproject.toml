@@ -9,6 +9,7 @@ requires-python = ">=3.13"
 dependencies = [
     "caldav>=3.3.1",
     "mcp>=2.2.0",
+    "niquests>=3.21.2",
 ]
 
 [project.scripts]
